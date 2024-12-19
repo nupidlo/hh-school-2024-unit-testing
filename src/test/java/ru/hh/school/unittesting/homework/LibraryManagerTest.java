@@ -9,14 +9,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.lang.reflect.Field;
-import java.util.HashMap;
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -24,10 +22,6 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 public class LibraryManagerTest {
-
-  // приватные поля, к которым будем получать доступ
-  private Field bookInventory;
-  private Field borrowedBooks;
 
   @Mock
   private NotificationService notificationService;
@@ -38,21 +32,10 @@ public class LibraryManagerTest {
   @InjectMocks
   private LibraryManager libraryManager;
 
-  public LibraryManagerTest() throws NoSuchFieldException {
-  }
-
   @BeforeEach
-  void setUp() throws NoSuchFieldException, IllegalAccessException {
-    // получение доступа к приватным полям libraryManager и установка дефолтных значений для тестов
-    bookInventory = LibraryManager.class.getDeclaredField("bookInventory");
-    bookInventory.setAccessible(true);
-    HashMap<String, Integer> bookInventoryToSet = new HashMap<>(Map.of("book1", 5, "book2", 3));
-    bookInventory.set(libraryManager, bookInventoryToSet);
-
-    borrowedBooks = LibraryManager.class.getDeclaredField("borrowedBooks");
-    borrowedBooks.setAccessible(true);
-    HashMap<String, String> borrowedBooksToSet = new HashMap<>(Map.of("book1", "user1"));
-    borrowedBooks.set(libraryManager, borrowedBooksToSet);
+  void setUp() {
+    libraryManager.addBook("book1", 5);
+    libraryManager.addBook("book2", 3);
   }
 
   @Test
@@ -61,79 +44,80 @@ public class LibraryManagerTest {
     assertEquals(2, libraryManager.getAvailableCopies("book4"));
   }
 
-  /* Параметризованный тест для borrowBook()
-  * 1 - успешное взятие книги
-  * 2 - ошибка, пользователь с неактивным аккаунтом
-  * 3 - ошибка, книги нет в наличии */
-  @ParameterizedTest
-  @CsvSource({
-      "book1, user1, true, true, 4, You have borrowed the book: book1",
-      "book1, user2, false, false, 5, Your account is not active.",
-      "book3, user1, true, false, 0, ",
-  })
-  void testBorrowBook(
-      String bookId,
-      String userId,
-      boolean userServiceResponse,
-      boolean expectedResult,
-      int expectedQuantity,
-      String expectedMsg
-  ) throws IllegalAccessException {
-    when(userService.isUserActive(userId)).thenReturn(userServiceResponse);
-
-    assertEquals(expectedResult, libraryManager.borrowBook(bookId, userId));
-
-    Map<String, Integer> availableBooks = (HashMap<String, Integer>) bookInventory.get(libraryManager);
-    assertEquals(expectedQuantity, availableBooks.getOrDefault(bookId, 0));
-
-    if (expectedResult) {
-      Map<String, String> borrowedBooksMap = (HashMap<String, String>) borrowedBooks.get(libraryManager);
-      assertEquals(userId, borrowedBooksMap.getOrDefault(bookId, null));
-    }
-
-    verify(userService, times(1)).isUserActive(userId);
-
-    if (expectedMsg != null) {
-      verify(notificationService, times(1)).notifyUser(userId, expectedMsg);
-    } else {
-      verify(notificationService, never()).notifyUser(userId, null);
-    }
+  @Test
+  void testAddExistingBook() {
+    libraryManager.addBook("book1", 3);
+    assertEquals(8, libraryManager.getAvailableCopies("book1"));
   }
 
-  /* Параметризованный тест для returnBook()
-   * 1 - успешное возвращение книги
-   * 2 - ошибка, пользователь пытается вернуть не свою книгу
-   * 3 - ошибка, книги нет в наличии */
-  @ParameterizedTest
-  @CsvSource({
-      "book1, user1, true, 6, You have returned the book: book1",
-      "book1, user2, false, 5, ",
-      "book3, user1, false, 0, "
-  })
-  void testReturnBook(
-      String bookId,
-      String userId,
-      boolean expectedResult,
-      int expectedQuantity,
-      String expectedMsg
-  ) throws IllegalAccessException {
-    assertEquals(expectedResult, libraryManager.returnBook(bookId, userId));
+  @Test
+  void testBorrowBookSuccess() {
+    when(userService.isUserActive("user1")).thenReturn(true);
 
-    Map<String, Integer> availableBooks = (HashMap<String, Integer>) bookInventory.get(libraryManager);
-    assertEquals(expectedQuantity, availableBooks.getOrDefault(bookId, 0));
+    assertTrue(libraryManager.borrowBook("book1", "user1"));
+    assertEquals(4, libraryManager.getAvailableCopies("book1"));
 
-    Map<String, String> borrowedBooksMap = (HashMap<String, String>) borrowedBooks.get(libraryManager);
-    if (expectedResult) {
-      assertNull(borrowedBooksMap.getOrDefault(bookId, null));
-    } else {
-      assertNotEquals(userId, borrowedBooksMap.getOrDefault(bookId, null));
-    }
+    verify(userService, times(1)).isUserActive("user1");
+    verify(notificationService, times(1))
+        .notifyUser("user1", "You have borrowed the book: book1");
+  }
 
-    if (expectedMsg != null) {
-      verify(notificationService, times(1)).notifyUser(userId, expectedMsg);
-    } else {
-      verify(notificationService, never()).notifyUser(userId, null);
-    }
+  @Test
+  void testBorrowBookShouldReturnFalseIfUserAccountIsNotActive() {
+    when(userService.isUserActive("user1")).thenReturn(false);
+
+    assertFalse(libraryManager.borrowBook("book1", "user1"));
+    assertEquals(5, libraryManager.getAvailableCopies("book1"));
+
+    verify(userService, times(1)).isUserActive("user1");
+    verify(notificationService, times(1))
+        .notifyUser("user1", "Your account is not active.");
+  }
+
+  @Test
+  void testBorrowBookShouldReturnFalseIfThereAreNoAvailableCopies() {
+    when(userService.isUserActive("user1")).thenReturn(true);
+
+    assertFalse(libraryManager.borrowBook("book3", "user1"));
+    assertEquals(0, libraryManager.getAvailableCopies("book3"));
+
+    verify(userService, times(1)).isUserActive("user1");
+    verify(notificationService, never()).notifyUser(anyString(), anyString());
+  }
+
+  @Test
+  void testReturnBookSuccess() {
+    // Занимаем книгу, чтобы потом ее вернуть
+    when(userService.isUserActive("user1")).thenReturn(true);
+    assertTrue(libraryManager.borrowBook("book1", "user1"));
+    assertEquals(4, libraryManager.getAvailableCopies("book1"));
+
+    assertTrue(libraryManager.returnBook("book1", "user1"));
+    assertEquals(5, libraryManager.getAvailableCopies("book1"));
+
+    verify(notificationService, times(1))
+        .notifyUser("user1", "You have returned the book: book1");
+  }
+
+  @Test
+  void getTestReturnBookShouldReturnFalseIfTheBookWasBorrowedByAnotherUser() {
+    // Занимаем книгу, чтобы потом ее вернуть
+    when(userService.isUserActive("user1")).thenReturn(true);
+    assertTrue(libraryManager.borrowBook("book1", "user1"));
+    assertEquals(4, libraryManager.getAvailableCopies("book1"));
+
+    assertFalse(libraryManager.returnBook("book1", "user2"));
+    assertEquals(4, libraryManager.getAvailableCopies("book1"));
+
+    verify(notificationService, never()).notifyUser(anyString(), eq("You have returned the book: book1"));
+  }
+
+  @Test
+  void testReturnBookShouldReturnFalseIfTheBookWasNotBorrowed() {
+    assertFalse(libraryManager.returnBook("book1", "user1"));
+    assertEquals(5, libraryManager.getAvailableCopies("book1"));
+
+    verify(notificationService, never()).notifyUser(anyString(), anyString());
   }
 
   @Test
@@ -151,7 +135,8 @@ public class LibraryManagerTest {
       "13, false, false, 6.50",
       "13, true, false, 9.75",
       "13, false, true, 5.20",
-      "13, true, true, 7.80"
+      "13, true, true, 7.80",
+      "0, true, true, 0.0"
   })
   void testCalculateDynamicLateFee(
       int overdueDays,
